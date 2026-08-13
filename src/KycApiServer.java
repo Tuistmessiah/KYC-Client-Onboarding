@@ -1,10 +1,14 @@
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
+import java.util.stream.Collectors;
 
 /**
  * Lightweight HTTP API server for the KYC Client Onboarding system.
@@ -27,6 +31,7 @@ import java.sql.*;
  *   GET /api/onboarding/cases/{id} – case details with submitted document checklist
  *   POST /api/onboarding/cases/{id}/documents – submit a document for a case
  *   PATCH /api/onboarding/cases/{id}/documents/{docId}/verify – mark a document as verified
+ *   PATCH /api/onboarding/cases/{id}/status – update case status
  * </pre>
  *
  * <p>
@@ -89,7 +94,9 @@ public class KycApiServer {
         }
     }
 
-    /** Routes onboarding cases and nested sub-resources (documents, verification). */
+    /**
+     * Routes onboarding cases and nested sub-resources (documents, status updates).
+     */
     static class CasesHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -108,7 +115,14 @@ public class KycApiServer {
                     handleCreateOnboardingCase(exchange);
                 }
             } else if ("PATCH".equalsIgnoreCase(method)) {
-                if (parts.length >= 8 && "documents".equals(parts[5]) && "verify".equals(parts[7])) {
+                if (parts.length == 6 && "status".equals(parts[5])) {
+                    try {
+                        int caseId = Integer.parseInt(parts[4]);
+                        handleUpdateCaseStatus(exchange, caseId);
+                    } catch (NumberFormatException e) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
+                    }
+                } else if (parts.length >= 8 && "documents".equals(parts[5]) && "verify".equals(parts[7])) {
                     try {
                         int caseId = Integer.parseInt(parts[4]);
                         int docId = Integer.parseInt(parts[6]);
@@ -139,15 +153,17 @@ public class KycApiServer {
 
     /** Creates a new client record. */
     static void handleCreateClient(HttpExchange exchange) throws IOException {
-        String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) " +
-                     "VALUES ('Jan Kowalski', 'INDIVIDUAL', 'PL', 'PL', '1990-01-01', 'PL', 'PENDING', true)";
+        String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) "
+                +
+                "VALUES ('Jan Kowalski', 'INDIVIDUAL', 'PL', 'PL', '1990-01-01', 'PL', 'PENDING', true)";
         try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
+                Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
             try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
                 if (generatedKeys.next()) {
                     int newId = generatedKeys.getInt(1);
-                    sendResponse(exchange, 201, "{\"message\":\"Client created successfully\",\"client_id\":" + newId + "}");
+                    sendResponse(exchange, 201,
+                            "{\"message\":\"Client created successfully\",\"client_id\":" + newId + "}");
                     return;
                 }
             }
@@ -161,14 +177,15 @@ public class KycApiServer {
     /** Opens a new onboarding case for a client. */
     static void handleCreateOnboardingCase(HttpExchange exchange) throws IOException {
         String sql = "INSERT INTO onboarding_case (client_id, opened_date, product_type, case_status) " +
-                     "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
+                "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
         try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement()) {
+                Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
             try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
                 if (generatedKeys.next()) {
                     int newCaseId = generatedKeys.getInt(1);
-                    sendResponse(exchange, 201, "{\"message\":\"Onboarding case opened successfully\",\"case_id\":" + newCaseId + "}");
+                    sendResponse(exchange, 201,
+                            "{\"message\":\"Onboarding case opened successfully\",\"case_id\":" + newCaseId + "}");
                     return;
                 }
             }
@@ -182,15 +199,16 @@ public class KycApiServer {
     /** Submits a document for a specific onboarding case. */
     static void handleUploadDocument(HttpExchange exchange, int caseId) throws IOException {
         String sql = "INSERT INTO document (case_id, doc_type_id, submission_date, verified_flag) " +
-                     "VALUES (?, 1, CURDATE(), false)";
+                "VALUES (?, 1, CURDATE(), false)";
         try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             ps.setInt(1, caseId);
             ps.executeUpdate();
             try (ResultSet generatedKeys = ps.getGeneratedKeys()) {
                 if (generatedKeys.next()) {
                     int docId = generatedKeys.getInt(1);
-                    sendResponse(exchange, 201, "{\"message\":\"Document submitted successfully\",\"doc_id\":" + docId + "}");
+                    sendResponse(exchange, 201,
+                            "{\"message\":\"Document submitted successfully\",\"doc_id\":" + docId + "}");
                     return;
                 }
             }
@@ -205,14 +223,46 @@ public class KycApiServer {
     static void handleVerifyDocument(HttpExchange exchange, int caseId, int docId) throws IOException {
         String sql = "UPDATE document SET verified_flag = true WHERE doc_id = ? AND case_id = ?";
         try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+                PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, docId);
             ps.setInt(2, caseId);
             int rowsUpdated = ps.executeUpdate();
             if (rowsUpdated > 0) {
-                sendResponse(exchange, 200, "{\"message\":\"Document verified successfully\",\"doc_id\":" + docId + "}");
+                sendResponse(exchange, 200,
+                        "{\"message\":\"Document verified successfully\",\"doc_id\":" + docId + "}");
             } else {
                 sendResponse(exchange, 404, "{\"error\":\"Document not found or does not match the case\"}");
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+        }
+    }
+
+    /** Updates the status of an onboarding case. */
+    static void handleUpdateCaseStatus(HttpExchange exchange, int caseId) throws IOException {
+        String body;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+            body = reader.lines().collect(Collectors.joining("\n"));
+        }
+
+        String newStatus = extractJsonValue(body, "case_status");
+        if (newStatus == null || newStatus.isEmpty()) {
+            sendResponse(exchange, 400, "{\"error\":\"Missing 'case_status' in request body\"}");
+            return;
+        }
+
+        String sql = "UPDATE onboarding_case SET case_status = ? WHERE case_id = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, newStatus);
+            ps.setInt(2, caseId);
+            int rowsUpdated = ps.executeUpdate();
+            if (rowsUpdated > 0) {
+                sendResponse(exchange, 200, "{\"message\":\"Case status updated successfully\",\"case_id\":" + caseId
+                        + ",\"case_status\":\"" + escape(newStatus) + "\"}");
+            } else {
+                sendResponse(exchange, 404, "{\"error\":\"Case not found\"}");
             }
         } catch (SQLException e) {
             sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
@@ -379,5 +429,26 @@ public class KycApiServer {
 
     static String jsonStringOrNull(String s) {
         return s == null ? "null" : "\"" + escape(s) + "\"";
+    }
+
+    /**
+     * Simple helper to extract a string property from a flat JSON body without
+     * external libraries.
+     */
+    static String extractJsonValue(String json, String key) {
+        String searchKey = "\"" + key + "\"";
+        int keyIndex = json.indexOf(searchKey);
+        if (keyIndex == -1)
+            return null;
+        int colonIndex = json.indexOf(':', keyIndex + searchKey.length());
+        if (colonIndex == -1)
+            return null;
+        int firstQuote = json.indexOf('"', colonIndex);
+        if (firstQuote == -1)
+            return null;
+        int secondQuote = json.indexOf('"', firstQuote + 1);
+        if (secondQuote == -1)
+            return null;
+        return json.substring(firstQuote + 1, secondQuote);
     }
 }
