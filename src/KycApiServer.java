@@ -21,7 +21,9 @@ import java.sql.*;
  * 
  * <pre>
  *   GET /api/clients             – list all clients (summary fields)
+ *   POST /api/clients            – create a new client record
  *   GET /api/clients/{id}        – full client record by internal ID
+ *   POST /api/onboarding/cases   – open a new onboarding case
  *   GET /api/onboarding/cases/{id} – case details with submitted document checklist
  * </pre>
  *
@@ -49,8 +51,9 @@ public class KycApiServer {
         server.setExecutor(null);
 
         System.out.println("KYC API Server started on port " + port);
-        System.out.println("  GET http://localhost:" + port + "/api/clients");
+        System.out.println("  GET/POST http://localhost:" + port + "/api/clients");
         System.out.println("  GET http://localhost:" + port + "/api/clients/{id}");
+        System.out.println("  POST http://localhost:" + port + "/api/onboarding/cases");
         System.out.println("  GET http://localhost:" + port + "/api/onboarding/cases/{id}");
         server.start();
     }
@@ -84,6 +87,37 @@ public class KycApiServer {
         }
     }
 
+    /**
+     * Routes {@code /api/onboarding/cases} for POST or
+     * {@code /api/onboarding/cases/{id}} for GET.
+     */
+    static class CasesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String method = exchange.getRequestMethod();
+            String path = exchange.getRequestURI().getPath();
+            String[] parts = path.split("/");
+
+            if ("POST".equalsIgnoreCase(method)) {
+                handleCreateOnboardingCase(exchange);
+            } else if ("GET".equalsIgnoreCase(method)) {
+                if (parts.length < 5 || parts[4].isEmpty()) {
+                    sendResponse(exchange, 400, "{\"error\":\"Case ID required: /api/onboarding/cases/{id}\"}");
+                    return;
+                }
+                try {
+                    handleGetCaseById(exchange, Integer.parseInt(parts[4]));
+                } catch (NumberFormatException e) {
+                    sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
+                }
+            } else {
+                sendResponse(exchange, 405, "{\"error\":\"Method Not Allowed\"}");
+            }
+        }
+    }
+
+    // --- Query methods ---
+
     /** Creates a new client record. */
     static void handleCreateClient(HttpExchange exchange) throws IOException {
         String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) "
@@ -107,29 +141,27 @@ public class KycApiServer {
         sendResponse(exchange, 500, "{\"error\":\"Failed to create client\"}");
     }
 
-    /** Routes {@code /api/onboarding/cases/{id}} — case ID is mandatory. */
-    static class CasesHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                sendResponse(exchange, 405, "{\"error\":\"Method Not Allowed\"}");
-                return;
+    /** Opens a new onboarding case for a client. */
+    static void handleCreateOnboardingCase(HttpExchange exchange) throws IOException {
+        String sql = "INSERT INTO onboarding_case (client_id, opened_date, product_type, case_status) " +
+                "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
+        try (Connection conn = getConnection();
+                Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
+            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    int newCaseId = generatedKeys.getInt(1);
+                    sendResponse(exchange, 201,
+                            "{\"message\":\"Onboarding case opened successfully\",\"case_id\":" + newCaseId + "}");
+                    return;
+                }
             }
-            String[] parts = exchange.getRequestURI().getPath().split("/");
-            // ["", "api", "onboarding", "cases", "42"]
-            if (parts.length < 5 || parts[4].isEmpty()) {
-                sendResponse(exchange, 400, "{\"error\":\"Case ID required: /api/onboarding/cases/{id}\"}");
-                return;
-            }
-            try {
-                handleGetCaseById(exchange, Integer.parseInt(parts[4]));
-            } catch (NumberFormatException e) {
-                sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
-            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
         }
+        sendResponse(exchange, 500, "{\"error\":\"Failed to open onboarding case\"}");
     }
-
-    // --- Query methods ---
 
     /**
      * Returns a summary list of all clients (id, name, type, nationality, status,
