@@ -105,14 +105,12 @@ The relay server exposes a local HTTP endpoint that retrieves data directly from
 1. Navigate to the source directory:
 ```bash
 cd src
-
 ```
 
 
 2. Compile the Java server with the JDBC driver on the classpath:
 ```bash
 javac -cp "lib/mysql-connector-j-8.3.0.jar" KycApiServer.java
-
 ```
 
 
@@ -120,20 +118,13 @@ javac -cp "lib/mysql-connector-j-8.3.0.jar" KycApiServer.java
 * **In Windows environment (Git Bash):**
 ```bash
 java -cp ".;lib/mysql-connector-j-8.3.0.jar" KycApiServer
-
 ```
 
 
 * **In Linux / macOS environment:**
 ```bash
 java -cp ".:lib/mysql-connector-j-8.3.0.jar" KycApiServer
-
 ```
-
-
-
-
-
 ---
 
 ## 🌐 API Endpoints
@@ -157,7 +148,6 @@ cd .\KYC-Client-Onboarding\src
 javac -cp "lib/mysql-connector-j-8.3.0.jar" KycApiServer.java
 $env:MYSQL_PASSWORD="your_password"
 java -cp ".;lib/mysql-connector-j-8.3.0.jar" KycApiServer
-
 ```
 
 **Expected console output:**
@@ -168,7 +158,6 @@ KYC API Server started on port 8080
   GET http://localhost:8080/api/clients/{id}
   POST http://localhost:8080/api/onboarding/cases
   GET http://localhost:8080/api/onboarding/cases/{id}
-
 ```
 
 *(To stop the server, press `Ctrl + C` in the terminal).*
@@ -183,35 +172,30 @@ Open a separate terminal window to exercise the API workflow using `curl`:
 
 ```bash
 curl -X POST http://localhost:8080/api/clients
-
 ```
 
 *Expected Response:*
 
 ```json
 {"message":"Client created successfully","client_id":12}
-
 ```
 
 #### Step 2: Open an Onboarding Case
 
 ```bash
 curl -X POST http://localhost:8080/api/onboarding/cases
-
 ```
 
 *Expected Response:*
 
 ```json
 {"message":"Onboarding case opened successfully","case_id":10}
-
 ```
 
 #### Step 3: Get Case Details & Document Checklist
 
 ```bash
 curl -X GET http://localhost:8080/api/onboarding/cases/10
-
 ```
 
 *Expected Response:*
@@ -230,19 +214,135 @@ curl -X GET http://localhost:8080/api/onboarding/cases/10
   "rejection_reason": null,
   "documents": []
 }
-
 ```
 
 #### Step 4: Submit a Document for a Case
 
 ```bash
 curl -X POST http://localhost:8080/api/onboarding/cases/10/documents
-
 ```
 
 *Expected Response:*
 
 ```json
 {"message":"Document submitted successfully","doc_id":9}
+```
 
+Oto zaktualizowana sekcja **`Testing Core Endpoints`** w pliku **`README.md`**, rozbudowana dokładnie w tym samym, spójnym stylu o wszystkie 4 nowo zaimplementowane endpointy:
+
+```markdown
+## 🛠️ Testing Core Endpoints
+
+Open a separate terminal window to exercise the API workflow using `curl`:
+
+#### Step 1: Create a New Client
+```bash
+curl -X POST http://localhost:8080/api/clients
+```
+
+*Expected Response:*
+
+```json
+{"message":"Client created successfully","client_id":12}
+```
+
+#### Step 2: Open an Onboarding Case
+
+```bash
+curl -X POST http://localhost:8080/api/onboarding/cases
+
+```
+
+*Expected Response:*
+
+```json
+{"message":"Onboarding case opened successfully","case_id":10}
+```
+
+#### Step 3: Get Case Details & Document Checklist
+
+```bash
+curl -X GET http://localhost:8080/api/onboarding/cases/10
+```
+
+*Expected Response:*
+
+```json
+{
+  "case_id": 10,
+  "client_id": 11,
+  "client_name": "Jan Kowalski",
+  "client_type": "INDIVIDUAL",
+  "product_type": "STANDARD_ACCOUNT",
+  "case_status": "PENDING",
+  "opened_date": "2026-08-13 11:33:37",
+  "due_date": null,
+  "completed_date": null,
+  "rejection_reason": null,
+  "documents": []
+}
+```
+
+#### Step 4: Submit a Document for a Case
+
+```bash
+curl -X POST http://localhost:8080/api/onboarding/cases/10/documents
+```
+
+*Expected Response:*
+
+```json
+{"message":"Document submitted successfully","doc_id":9}
+```
+
+#### Step 5: Mark a Document as Verified
+
+```bash
+curl -X PATCH http://localhost:8080/api/onboarding/cases/10/documents/9/verify
+```
+
+*Expected Response:*
+
+```json
+{"message":"Document verified successfully","doc_id":9}
+```
+
+#### Step 6: Update Case Status
+
+```bash
+curl -X PATCH http://localhost:8080/api/onboarding/cases/10/status \
+  -H "Content-Type: application/json" \
+  -d "{\"case_status\":\"APPROVED\"}"
+```
+
+*Expected Response:*
+
+```json
+{"message":"Case status updated successfully","case_id":10,"case_status":"APPROVED"}
+```
+
+#### Step 7: List Cases Awaiting Review (or Filter by Status)
+
+```bash
+curl -X GET "http://localhost:8080/api/onboarding/cases?status=PENDING_REVIEW"
+```
+
+*Expected Response:*
+
+```json
+[]
+```
+
+#### Step 8: List Clients with Documents Expiring Within N Days
+
+```bash
+curl -X GET "http://localhost:8080/api/clients/expiring-documents?days=30"
+```
+
+*Expected Response:*
+
+```json
+[
+  {"client_id":4,"full_name":"The Sterling Family Trust","client_type":"TRUST","doc_id":4,"doc_type":"TRUST_DEED","expiry_date":"2026-08-31"}
+]
 ```
