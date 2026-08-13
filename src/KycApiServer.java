@@ -99,7 +99,15 @@ public class KycApiServer {
             String[] parts = path.split("/");
 
             if ("POST".equalsIgnoreCase(method)) {
-                handleCreateOnboardingCase(exchange);
+                if (parts.length == 6 && "documents".equals(parts[5])) {
+                    try {
+                        handleUploadDocument(exchange, Integer.parseInt(parts[4]));
+                    } catch (NumberFormatException e) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
+                    }
+                } else {
+                    handleCreateOnboardingCase(exchange);
+                }
             } else if ("GET".equalsIgnoreCase(method)) {
                 if (parts.length < 5 || parts[4].isEmpty()) {
                     sendResponse(exchange, 400, "{\"error\":\"Case ID required: /api/onboarding/cases/{id}\"}");
@@ -114,6 +122,28 @@ public class KycApiServer {
                 sendResponse(exchange, 405, "{\"error\":\"Method Not Allowed\"}");
             }
         }
+    }
+
+    /** Submits a document for a specific onboarding case. */
+    static void handleUploadDocument(HttpExchange exchange, int caseId) throws IOException {
+        String sql = "INSERT INTO document (case_id, doc_type_id, submission_date, verified_flag) " +
+                     "VALUES (?, 1, CURDATE(), false)";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            ps.setInt(1, caseId);
+            ps.executeUpdate();
+            try (ResultSet generatedKeys = ps.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    int docId = generatedKeys.getInt(1);
+                    sendResponse(exchange, 201, "{\"message\":\"Document submitted successfully\",\"doc_id\":" + docId + "}");
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
+        }
+        sendResponse(exchange, 500, "{\"error\":\"Failed to submit document\"}");
     }
 
     // --- Query methods ---
