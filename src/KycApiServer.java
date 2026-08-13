@@ -15,33 +15,7 @@ import java.util.stream.Collectors;
  *
  * <p>
  * Uses the JDK built-in {@code com.sun.net.httpserver} — no external framework
- * required
- * beyond the MySQL JDBC driver. Credentials are read from environment variables
- * ({@code MYSQL_USER}, {@code MYSQL_PASSWORD}); see {@code .env} at the repo
- * root.
- *
- * <p>
- * Endpoints:
- * 
- * <pre>
- *   GET /api/clients             – list all clients (summary fields)
- *   POST /api/clients            – create a new client record
- *   GET /api/clients/{id}        – full client record by internal ID
- *   POST /api/onboarding/cases   – open a new onboarding case
- *   GET /api/onboarding/cases/{id} – case details with submitted document checklist
- *   POST /api/onboarding/cases/{id}/documents – submit a document for a case
- *   PATCH /api/onboarding/cases/{id}/documents/{docId}/verify – mark a document as verified
- *   PATCH /api/onboarding/cases/{id}/status – update case status
- * </pre>
- *
- * <p>
- * Compile and run from the {@code src/} directory:
- * 
- * <pre>
- *   javac -cp "lib/mysql-connector-j-8.3.0.jar" KycApiServer.java
- *   java  -cp ".;lib/mysql-connector-j-8.3.0.jar" KycApiServer   # Windows
- *   java  -cp ".:lib/mysql-connector-j-8.3.0.jar" KycApiServer   # Linux/macOS
- * </pre>
+ * required beyond the MySQL JDBC driver.
  */
 public class KycApiServer {
 
@@ -62,15 +36,12 @@ public class KycApiServer {
         System.out.println("  GET http://localhost:" + port + "/api/clients/{id}");
         System.out.println("  POST http://localhost:" + port + "/api/onboarding/cases");
         System.out.println("  GET http://localhost:" + port + "/api/onboarding/cases/{id}");
+        System.out.println("  GET http://localhost:" + port + "/api/onboarding/cases?status={status}");
         server.start();
     }
 
     // --- Handlers ---
 
-    /**
-     * Routes {@code /api/clients} and {@code /api/clients/{id}} to the appropriate
-     * handler.
-     */
     static class ClientsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -94,14 +65,12 @@ public class KycApiServer {
         }
     }
 
-    /**
-     * Routes onboarding cases and nested sub-resources (documents, status updates).
-     */
     static class CasesHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             String method = exchange.getRequestMethod();
             String path = exchange.getRequestURI().getPath();
+            String query = exchange.getRequestURI().getQuery();
             String[] parts = path.split("/");
 
             if ("POST".equalsIgnoreCase(method)) {
@@ -134,14 +103,18 @@ public class KycApiServer {
                     sendResponse(exchange, 400, "{\"error\":\"Invalid PATCH endpoint path\"}");
                 }
             } else if ("GET".equalsIgnoreCase(method)) {
-                if (parts.length < 5 || parts[4].isEmpty()) {
-                    sendResponse(exchange, 400, "{\"error\":\"Case ID required: /api/onboarding/cases/{id}\"}");
-                    return;
-                }
-                try {
-                    handleGetCaseById(exchange, Integer.parseInt(parts[4]));
-                } catch (NumberFormatException e) {
-                    sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
+                if (parts.length >= 5 && !parts[4].isEmpty()) {
+                    try {
+                        handleGetCaseById(exchange, Integer.parseInt(parts[4]));
+                    } catch (NumberFormatException e) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid case ID\"}");
+                    }
+                } else {
+                    String statusFilter = null;
+                    if (query != null && query.startsWith("status=")) {
+                        statusFilter = query.substring(7);
+                    }
+                    handleListCases(exchange, statusFilter);
                 }
             } else {
                 sendResponse(exchange, 405, "{\"error\":\"Method Not Allowed\"}");
@@ -151,7 +124,6 @@ public class KycApiServer {
 
     // --- Query methods ---
 
-    /** Creates a new client record. */
     static void handleCreateClient(HttpExchange exchange) throws IOException {
         String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) "
                 +
@@ -174,7 +146,6 @@ public class KycApiServer {
         sendResponse(exchange, 500, "{\"error\":\"Failed to create client\"}");
     }
 
-    /** Opens a new onboarding case for a client. */
     static void handleCreateOnboardingCase(HttpExchange exchange) throws IOException {
         String sql = "INSERT INTO onboarding_case (client_id, opened_date, product_type, case_status) " +
                 "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
@@ -196,7 +167,6 @@ public class KycApiServer {
         sendResponse(exchange, 500, "{\"error\":\"Failed to open onboarding case\"}");
     }
 
-    /** Submits a document for a specific onboarding case. */
     static void handleUploadDocument(HttpExchange exchange, int caseId) throws IOException {
         String sql = "INSERT INTO document (case_id, doc_type_id, submission_date, verified_flag) " +
                 "VALUES (?, 1, CURDATE(), false)";
@@ -219,7 +189,6 @@ public class KycApiServer {
         sendResponse(exchange, 500, "{\"error\":\"Failed to submit document\"}");
     }
 
-    /** Marks a document as verified for a given case and document ID. */
     static void handleVerifyDocument(HttpExchange exchange, int caseId, int docId) throws IOException {
         String sql = "UPDATE document SET verified_flag = true WHERE doc_id = ? AND case_id = ?";
         try (Connection conn = getConnection();
@@ -238,7 +207,6 @@ public class KycApiServer {
         }
     }
 
-    /** Updates the status of an onboarding case. */
     static void handleUpdateCaseStatus(HttpExchange exchange, int caseId) throws IOException {
         String body;
         try (BufferedReader reader = new BufferedReader(
@@ -269,10 +237,6 @@ public class KycApiServer {
         }
     }
 
-    /**
-     * Returns a summary list of all clients (id, name, type, nationality, status,
-     * is_active).
-     */
     static void handleListClients(HttpExchange exchange) throws IOException {
         String sql = "SELECT client_id, full_name, client_type, nationality, status, is_active FROM client";
         StringBuilder json = new StringBuilder("[\n");
@@ -301,7 +265,48 @@ public class KycApiServer {
         sendResponse(exchange, 200, json.toString());
     }
 
-    /** Returns the full client record for {@code id}, or 404 if not found. */
+    static void handleListCases(HttpExchange exchange, String statusFilter) throws IOException {
+        String sql = "SELECT oc.case_id, oc.client_id, oc.opened_date, oc.product_type, oc.case_status, " +
+                "c.full_name AS client_name, c.client_type " +
+                "FROM onboarding_case oc JOIN client c ON oc.client_id = c.client_id";
+
+        if (statusFilter != null && !statusFilter.isEmpty()) {
+            sql += " WHERE oc.case_status = ?";
+        }
+
+        StringBuilder json = new StringBuilder("[\n");
+        try (Connection conn = getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            if (statusFilter != null && !statusFilter.isEmpty()) {
+                ps.setString(1, statusFilter);
+            }
+
+            try (ResultSet rs = ps.executeQuery()) {
+                boolean first = true;
+                while (rs.next()) {
+                    if (!first)
+                        json.append(",\n");
+                    json.append("  {")
+                            .append("\"case_id\":").append(rs.getInt("case_id")).append(",")
+                            .append("\"client_id\":").append(rs.getInt("client_id")).append(",")
+                            .append("\"client_name\":\"").append(escape(rs.getString("client_name"))).append("\",")
+                            .append("\"client_type\":\"").append(escape(rs.getString("client_type"))).append("\",")
+                            .append("\"product_type\":\"").append(escape(rs.getString("product_type"))).append("\",")
+                            .append("\"case_status\":\"").append(escape(rs.getString("case_status"))).append("\",")
+                            .append("\"opened_date\":\"").append(rs.getString("opened_date")).append("\"")
+                            .append("}");
+                    first = false;
+                }
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
+        }
+        json.append("\n]");
+        sendResponse(exchange, 200, json.toString());
+    }
+
     static void handleGetClientById(HttpExchange exchange, int id) throws IOException {
         String sql = "SELECT client_id, full_name, client_type, nationality, date_of_birth, " +
                 "country_of_birth, tax_residency, occupation, employer, main_source_of_funds, " +
@@ -336,10 +341,6 @@ public class KycApiServer {
         }
     }
 
-    /**
-     * Returns case details joined with client info, plus all documents submitted
-     * for the case.
-     */
     static void handleGetCaseById(HttpExchange exchange, int id) throws IOException {
         String caseSql = "SELECT oc.case_id, oc.client_id, oc.opened_date, oc.product_type, oc.case_status, " +
                 "oc.due_date, oc.completed_date, oc.rejection_reason, " +
@@ -431,10 +432,6 @@ public class KycApiServer {
         return s == null ? "null" : "\"" + escape(s) + "\"";
     }
 
-    /**
-     * Simple helper to extract a string property from a flat JSON body without
-     * external libraries.
-     */
     static String extractJsonValue(String json, String key) {
         String searchKey = "\"" + key + "\"";
         int keyIndex = json.indexOf(searchKey);
