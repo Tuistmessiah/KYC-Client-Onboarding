@@ -25,6 +25,8 @@ import java.sql.*;
  *   GET /api/clients/{id}        – full client record by internal ID
  *   POST /api/onboarding/cases   – open a new onboarding case
  *   GET /api/onboarding/cases/{id} – case details with submitted document checklist
+ *   POST /api/onboarding/cases/{id}/documents – submit a document for a case
+ *   PATCH /api/onboarding/cases/{id}/documents/{docId}/verify – mark a document as verified
  * </pre>
  *
  * <p>
@@ -87,10 +89,7 @@ public class KycApiServer {
         }
     }
 
-    /**
-     * Routes {@code /api/onboarding/cases} for POST or
-     * {@code /api/onboarding/cases/{id}} for GET.
-     */
+    /** Routes onboarding cases and nested sub-resources (documents, verification). */
     static class CasesHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -108,6 +107,18 @@ public class KycApiServer {
                 } else {
                     handleCreateOnboardingCase(exchange);
                 }
+            } else if ("PATCH".equalsIgnoreCase(method)) {
+                if (parts.length >= 8 && "documents".equals(parts[5]) && "verify".equals(parts[7])) {
+                    try {
+                        int caseId = Integer.parseInt(parts[4]);
+                        int docId = Integer.parseInt(parts[6]);
+                        handleVerifyDocument(exchange, caseId, docId);
+                    } catch (NumberFormatException e) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid case ID or document ID\"}");
+                    }
+                } else {
+                    sendResponse(exchange, 400, "{\"error\":\"Invalid PATCH endpoint path\"}");
+                }
             } else if ("GET".equalsIgnoreCase(method)) {
                 if (parts.length < 5 || parts[4].isEmpty()) {
                     sendResponse(exchange, 400, "{\"error\":\"Case ID required: /api/onboarding/cases/{id}\"}");
@@ -122,6 +133,50 @@ public class KycApiServer {
                 sendResponse(exchange, 405, "{\"error\":\"Method Not Allowed\"}");
             }
         }
+    }
+
+    // --- Query methods ---
+
+    /** Creates a new client record. */
+    static void handleCreateClient(HttpExchange exchange) throws IOException {
+        String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) " +
+                     "VALUES ('Jan Kowalski', 'INDIVIDUAL', 'PL', 'PL', '1990-01-01', 'PL', 'PENDING', true)";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
+            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    int newId = generatedKeys.getInt(1);
+                    sendResponse(exchange, 201, "{\"message\":\"Client created successfully\",\"client_id\":" + newId + "}");
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
+        }
+        sendResponse(exchange, 500, "{\"error\":\"Failed to create client\"}");
+    }
+
+    /** Opens a new onboarding case for a client. */
+    static void handleCreateOnboardingCase(HttpExchange exchange) throws IOException {
+        String sql = "INSERT INTO onboarding_case (client_id, opened_date, product_type, case_status) " +
+                     "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
+            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    int newCaseId = generatedKeys.getInt(1);
+                    sendResponse(exchange, 201, "{\"message\":\"Onboarding case opened successfully\",\"case_id\":" + newCaseId + "}");
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
+        }
+        sendResponse(exchange, 500, "{\"error\":\"Failed to open onboarding case\"}");
     }
 
     /** Submits a document for a specific onboarding case. */
@@ -146,51 +201,22 @@ public class KycApiServer {
         sendResponse(exchange, 500, "{\"error\":\"Failed to submit document\"}");
     }
 
-    // --- Query methods ---
-
-    /** Creates a new client record. */
-    static void handleCreateClient(HttpExchange exchange) throws IOException {
-        String sql = "INSERT INTO client (full_name, client_type, nationality, country_of_birth, date_of_birth, tax_residency, status, is_active) "
-                +
-                "VALUES ('Jan Kowalski', 'INDIVIDUAL', 'PL', 'PL', '1990-01-01', 'PL', 'PENDING', true)";
+    /** Marks a document as verified for a given case and document ID. */
+    static void handleVerifyDocument(HttpExchange exchange, int caseId, int docId) throws IOException {
+        String sql = "UPDATE document SET verified_flag = true WHERE doc_id = ? AND case_id = ?";
         try (Connection conn = getConnection();
-                Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
-            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
-                if (generatedKeys.next()) {
-                    int newId = generatedKeys.getInt(1);
-                    sendResponse(exchange, 201,
-                            "{\"message\":\"Client created successfully\",\"client_id\":" + newId + "}");
-                    return;
-                }
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, docId);
+            ps.setInt(2, caseId);
+            int rowsUpdated = ps.executeUpdate();
+            if (rowsUpdated > 0) {
+                sendResponse(exchange, 200, "{\"message\":\"Document verified successfully\",\"doc_id\":" + docId + "}");
+            } else {
+                sendResponse(exchange, 404, "{\"error\":\"Document not found or does not match the case\"}");
             }
         } catch (SQLException e) {
             sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
-            return;
         }
-        sendResponse(exchange, 500, "{\"error\":\"Failed to create client\"}");
-    }
-
-    /** Opens a new onboarding case for a client. */
-    static void handleCreateOnboardingCase(HttpExchange exchange) throws IOException {
-        String sql = "INSERT INTO onboarding_case (client_id, opened_date, product_type, case_status) " +
-                "VALUES (11, CURRENT_TIMESTAMP, 'STANDARD_ACCOUNT', 'PENDING')";
-        try (Connection conn = getConnection();
-                Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate(sql, Statement.RETURN_GENERATED_KEYS);
-            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
-                if (generatedKeys.next()) {
-                    int newCaseId = generatedKeys.getInt(1);
-                    sendResponse(exchange, 201,
-                            "{\"message\":\"Onboarding case opened successfully\",\"case_id\":" + newCaseId + "}");
-                    return;
-                }
-            }
-        } catch (SQLException e) {
-            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
-            return;
-        }
-        sendResponse(exchange, 500, "{\"error\":\"Failed to open onboarding case\"}");
     }
 
     /**
@@ -263,9 +289,6 @@ public class KycApiServer {
     /**
      * Returns case details joined with client info, plus all documents submitted
      * for the case.
-     * Documents are fetched from the {@code document} and {@code document_type}
-     * tables.
-     * Returns 404 if the case ID does not exist.
      */
     static void handleGetCaseById(HttpExchange exchange, int id) throws IOException {
         String caseSql = "SELECT oc.case_id, oc.client_id, oc.opened_date, oc.product_type, oc.case_status, " +
@@ -335,12 +358,10 @@ public class KycApiServer {
 
     // --- Helpers ---
 
-    /** Opens a new JDBC connection using the configured DB URL and credentials. */
     static Connection getConnection() throws SQLException {
         return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
     }
 
-    /** Writes a JSON response with the given HTTP status code. */
     static void sendResponse(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes("UTF-8");
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
@@ -350,7 +371,6 @@ public class KycApiServer {
         }
     }
 
-    // Escapes characters that would break a JSON string value
     static String escape(String s) {
         if (s == null)
             return "";
