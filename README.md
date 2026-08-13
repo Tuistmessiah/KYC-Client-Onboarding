@@ -145,3 +145,108 @@ Once running, the API server is available at:
 | `GET`  | `http://localhost:8080/api/clients` | Returns a summary list of all clients (`client_id`, `full_name`, `client_type`, `nationality`, `status`, `is_active`) |
 | `GET`  | `http://localhost:8080/api/clients/{id}` | Returns the full record for a single client by ID |
 | `GET`  | `http://localhost:8080/api/onboarding/cases/{id}` | Returns case details with client info and all submitted documents for the case |
+
+## REST API - Setup, Running & Core Endpoints
+
+### 1. Compilation and Startup
+
+Navigate to the source directory, compile the server, set your environment password, and run it:
+
+```powershell
+cd .\KYC-Client-Onboarding\src
+javac -cp "lib/mysql-connector-j-8.3.0.jar" KycApiServer.java
+$env:MYSQL_PASSWORD="your_password"
+java -cp ".;lib/mysql-connector-j-8.3.0.jar" KycApiServer
+
+```
+
+**Expected console output:**
+
+```text
+KYC API Server started on port 8080
+  GET/POST http://localhost:8080/api/clients
+  GET http://localhost:8080/api/clients/{id}
+  POST http://localhost:8080/api/onboarding/cases
+  GET http://localhost:8080/api/onboarding/cases/{id}
+
+```
+
+*(To stop the server, press `Ctrl + C` in the terminal).*
+
+---
+
+### 2. Testing Core Endpoints
+
+Open a separate terminal window to exercise the API workflow using `curl`:
+
+#### Step 1: Create a New Client
+
+```bash
+curl -X POST http://localhost:8080/api/clients
+
+```
+
+*Expected Response:*
+
+```json
+{"message":"Client created successfully","client_id":12}
+
+```
+
+#### Step 2: Open an Onboarding Case
+
+```bash
+curl -X POST http://localhost:8080/api/onboarding/cases
+
+```
+
+*Expected Response:*
+
+```json
+{"message":"Onboarding case opened successfully","case_id":10}
+
+```
+
+#### Step 3: Get Case Details & Document Checklist
+
+```bash
+curl -X GET http://localhost:8080/api/onboarding/cases/10
+
+```
+
+*Expected Response:*
+
+```json
+{
+  "case_id": 10,
+  "client_id": 11,
+  "client_name": "Jan Kowalski",
+  "client_type": "INDIVIDUAL",
+  "product_type": "STANDARD_ACCOUNT",
+  "case_status": "PENDING",
+  "opened_date": "2026-08-13 11:33:37",
+  "due_date": null,
+  "completed_date": null,
+  "rejection_reason": null,
+  "documents": []
+}
+
+```
+
+#### Step 4: Submit a Document for a Case
+
+```bash
+curl -X POST http://localhost:8080/api/onboarding/cases/10/documents
+
+```
+
+*Expected Response:*
+
+```json
+{"message":"Document submitted successfully","doc_id":9}
+
+```
+
+```
+
+```
