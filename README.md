@@ -246,7 +246,3 @@ curl -X POST http://localhost:8080/api/onboarding/cases/10/documents
 {"message":"Document submitted successfully","doc_id":9}
 
 ```
-
-```
-
-```
