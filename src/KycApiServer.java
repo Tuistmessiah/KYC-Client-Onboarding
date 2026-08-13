@@ -34,6 +34,7 @@ public class KycApiServer {
         System.out.println("KYC API Server started on port " + port);
         System.out.println("  GET/POST http://localhost:" + port + "/api/clients");
         System.out.println("  GET http://localhost:" + port + "/api/clients/{id}");
+        System.out.println("  GET http://localhost:" + port + "/api/clients/expiring-documents?days={days}");
         System.out.println("  POST http://localhost:" + port + "/api/onboarding/cases");
         System.out.println("  GET http://localhost:" + port + "/api/onboarding/cases/{id}");
         System.out.println("  GET http://localhost:" + port + "/api/onboarding/cases?status={status}");
@@ -46,16 +47,28 @@ public class KycApiServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             String method = exchange.getRequestMethod();
+            String path = exchange.getRequestURI().getPath();
+            String query = exchange.getRequestURI().getQuery();
+            String[] parts = path.split("/");
+
             if ("GET".equalsIgnoreCase(method)) {
-                String[] parts = exchange.getRequestURI().getPath().split("/");
-                try {
-                    if (parts.length == 4 && !parts[3].isEmpty()) {
-                        handleGetClientById(exchange, Integer.parseInt(parts[3]));
-                    } else {
-                        handleListClients(exchange);
+                if (parts.length == 4 && "expiring-documents".equals(parts[3])) {
+                    int days = 30; // domyślnie 30 dni
+                    if (query != null && query.startsWith("days=")) {
+                        try {
+                            days = Integer.parseInt(query.substring(5));
+                        } catch (NumberFormatException ignored) {
+                        }
                     }
-                } catch (NumberFormatException e) {
-                    sendResponse(exchange, 400, "{\"error\":\"Invalid client ID\"}");
+                    handleListExpiringDocuments(exchange, days);
+                } else if (parts.length == 4 && !parts[3].isEmpty()) {
+                    try {
+                        handleGetClientById(exchange, Integer.parseInt(parts[3]));
+                    } catch (NumberFormatException e) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid client ID\"}");
+                    }
+                } else {
+                    handleListClients(exchange);
                 }
             } else if ("POST".equalsIgnoreCase(method)) {
                 handleCreateClient(exchange);
@@ -256,6 +269,44 @@ public class KycApiServer {
                         .append("\"is_active\":").append(rs.getBoolean("is_active"))
                         .append("}");
                 first = false;
+            }
+        } catch (SQLException e) {
+            sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            return;
+        }
+        json.append("\n]");
+        sendResponse(exchange, 200, json.toString());
+    }
+
+    static void handleListExpiringDocuments(HttpExchange exchange, int days) throws IOException {
+        String sql = "SELECT DISTINCT c.client_id, c.full_name, c.client_type, d.doc_id, dt.doc_type_name, d.expiry_date "
+                +
+                "FROM document d " +
+                "JOIN document_type dt ON d.doc_type_id = dt.doc_type_id " +
+                "JOIN onboarding_case oc ON d.case_id = oc.case_id " +
+                "JOIN client c ON oc.client_id = c.client_id " +
+                "WHERE d.expiry_date IS NOT NULL " +
+                "AND d.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL ? DAY)";
+
+        StringBuilder json = new StringBuilder("[\n");
+        try (Connection conn = getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, days);
+            try (ResultSet rs = ps.executeQuery()) {
+                boolean first = true;
+                while (rs.next()) {
+                    if (!first)
+                        json.append(",\n");
+                    json.append("  {")
+                            .append("\"client_id\":").append(rs.getInt("client_id")).append(",")
+                            .append("\"full_name\":\"").append(escape(rs.getString("full_name"))).append("\",")
+                            .append("\"client_type\":\"").append(escape(rs.getString("client_type"))).append("\",")
+                            .append("\"doc_id\":").append(rs.getInt("doc_id")).append(",")
+                            .append("\"doc_type\":\"").append(escape(rs.getString("doc_type_name"))).append("\",")
+                            .append("\"expiry_date\":\"").append(rs.getString("expiry_date")).append("\"")
+                            .append("}");
+                    first = false;
+                }
             }
         } catch (SQLException e) {
             sendResponse(exchange, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
